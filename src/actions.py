@@ -4,6 +4,18 @@ from botocore.config import Config
 from os import getenv
 from datetime import datetime
 
+ALERM_ACTION_RECOVER = 'recover'
+ALERM_ACTION_REBOOT = 'reboot'
+ALERM_ACTION_STOP = 'stop'
+ALERM_ACTION_TERMINATE = 'terminate'
+
+ALERT_ACTION_ARN_MAPPING = {
+    ALERM_ACTION_RECOVER: "arn:aws:automate:us-east-1:ec2:recover",
+    ALERM_ACTION_REBOOT: "arn:aws:automate:us-east-1:ec2:reboot",
+    ALERM_ACTION_STOP: "arn:aws:automate:us-east-1:ec2:stop",
+    ALERM_ACTION_TERMINATE: "arn:aws:automate:us-east-1:ec2:terminate"
+}
+
 logger = logging.getLogger()
 log_level = getenv("LOGLEVEL", "INFO")
 level = logging.getLevelName(log_level)
@@ -113,7 +125,8 @@ def process_lambda_alarms(function_name, tags, activation_tag, default_alarms, s
                          dimensions, sns_topic_arn, alarm_identifier)
 
 
-def create_alarm_from_tag(id, alarm_tag, instance_info, metric_dimensions_map, sns_topic_arn, alarm_separator, alarm_identifier):
+def create_alarm_from_tag(id, alarm_tag, instance_info, metric_dimensions_map, sns_topic_arn, alarm_separator,
+                          alarm_identifier):
     alarm_properties = alarm_tag['Key'].split(alarm_separator)
     namespace = alarm_properties[1]
     MetricName = alarm_properties[2]
@@ -179,11 +192,14 @@ def create_alarm_from_tag(id, alarm_tag, instance_info, metric_dimensions_map, s
     ComparisonOperator = alarm_properties[(properties_offset + 3)]
     Period = alarm_properties[(properties_offset + 4)]
     Statistic = alarm_properties[(properties_offset + 5)]
+    AlarmAction = None
+    if len(alarm_properties) > properties_offset + 6:
+        AlarmAction = alarm_properties[(properties_offset + 6)]
 
     AlarmName += alarm_separator.join(['', ComparisonOperator, Period, Statistic])
 
     create_alarm(AlarmName, MetricName, ComparisonOperator, Period, alarm_tag['Value'], Statistic, namespace,
-                 dimensions, sns_topic_arn)
+                 dimensions, sns_topic_arn, AlarmAction)
 
 
 def process_alarm_tags(instance_id, instance_info, default_alarms, metric_dimensions_map, sns_topic_arn, cw_namespace,
@@ -233,8 +249,8 @@ def determine_platform(imageid):
             elif 'SUSE' in platform_details:
                 return 'SUSE'
             elif 'Linux/UNIX' in platform_details:
-                if 'ubuntu' in image_info['Images'][0]['Description'].lower() or 'ubuntu' in image_info['Images'][0][
-                    'Name'].lower():
+                if 'ubuntu' in image_info['Images'][0].get('Description', '').lower() or 'ubuntu' \
+                        in image_info['Images'][0].get('Name', '').lower():
                     return 'Ubuntu'
                 else:
                     return 'Amazon Linux'
@@ -264,7 +280,7 @@ def convert_to_seconds(s):
 # Alarm Name Format: <AlarmIdentifier>-<InstanceId>-<Statistic>-<MetricName>-<ComparisonOperator>-<Threshold>-<Period>
 # Example:  AutoAlarm-i-00e4f327736cb077f-CPUUtilization-GreaterThanThreshold-80-5m
 def create_alarm(AlarmName, MetricName, ComparisonOperator, Period, Threshold, Statistic, Namespace, Dimensions,
-                 sns_topic_arn):
+                 sns_topic_arn, AlarmAction=None):
     AlarmDescription = 'Alarm created by lambda function CloudWatchAutoAlarms'
 
     try:
@@ -293,7 +309,8 @@ def create_alarm(AlarmName, MetricName, ComparisonOperator, Period, Threshold, S
         }
 
         if sns_topic_arn is not None:
-            alarm['AlarmActions'] = [sns_topic_arn]
+            alarm['AlarmActions'] = [sns_topic_arn] if not AlarmAction or ALERT_ACTION_ARN_MAPPING.get(AlarmAction) is None \
+                else [sns_topic_arn, ALERT_ACTION_ARN_MAPPING.get(AlarmAction)]
 
         cw_client.put_metric_alarm(**alarm)
 
